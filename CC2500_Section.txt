@@ -1,0 +1,299 @@
+\subsection{Record Sequence Testing}
+When testing the record sequence, packet correctness and the accuracy of the interpolation by the receiver needed to be observed. To ensure that all data packets sent by the transmitter are received, each packet is numbered from 0 to 255. Using the second packet control byte, the sample number is sent to the receiver where it is processed as labelled data. By observing the console output with no signal interference, none of the 256 data packets or control packets were observed to be lost. Although in practice some data packets may be lost, the system has the capability to interpolate over missing values since the data is labelled. In the controlled testing environment however, packet loss was found to be rare and record sequence protocol was typically executed correctly. Once protocol correctness had been established, the accuracy of the reconstruction could be observed. When the recorded sequence is linear and smooth with few sudden acceleration changes, the reconstruction appeared to be mirrored well. As expected, only when there are sudden changes in the board orientation does the sequence fail to mirror well. Since commonly tested sequences are typically linear, the 10Hz to 100Hz interpolation was observed to be a simple yet effective design choice. 
+
+
+
+
+
+
+
+
+
+
+
+
+\usepackage{ifthen}
+\usepackage{xstring}
+\usepackage{calc}
+\usepackage{pgfopts}
+\usepackage{tikz-uml}
+\usetikzlibrary{shapes.geometric, arrows}
+
+\tikzstyle{startstop} = [rectangle, rounded corners, minimum width=3cm, minimum height=1cm,text centered, draw=black, fill=red!30]
+\tikzstyle{process} = [rectangle, minimum width=2cm, minimum height=.5cm, text centered, draw=black, fill=orange!10]
+\tikzstyle{arrow} = [thick,->,>=stealth] % ,>=stealth]
+
+
+\section{Implmentation}
+
+\subsection{Pitch Roll Broadcast}
+The 100Hz broadcast is the default state for both the transmitter and receiver. Figure \ref{fig:broadcast} shows the complete broadcast sequence. Every 10ms, the transmitter fills the TX FIFO buffer with the current pitch and roll then sends a command probe to move to the TX state. The transmitter will move back to idle once the packet has been sent and will wait for a OS interrupt to send the next packet. Similarly, the receiver will wait in RX mode until a packet received, which changes the internal state of the CC2500 to idle. Every 8ms, the an OS interrupt causes a context switch to check if the CC2500 is idle. If the command strobe indicates that the CC2500 is in the idle state, the number of bytes in the RX buffer is read from the RXBYTES register. The receiver then reads the all the bytes out of the RX FIFO buffer. If multiple packets are received then only the first packet is read. It is acceptable for other packets to be dropped. Once a the transmitted pitch and roll have been extracted will the receiver move back to RX to receive the next packet.  
+
+\begin{figure}[H]
+\centering
+\begin{multicols}{2}  
+  \begin{center}  
+  \begin{tikzpicture}[node distance=1.5cm]
+
+  %\node (start) [startstop] {Start};
+  \node (tx) [process] {Fill TX buffer};
+  \node (cal) [process, below of=tx] {Calibrate};
+  \node (send) [process, below of=cal] {Move to TX};
+  \node (idle) [process, below of=send] {Wait for idle};
+  
+  \draw [arrow] (tx) -- node[anchor=east] {} (cal);
+  \draw [arrow] (cal) -- node[anchor=east] {} (send);
+  \draw [arrow] (send) -- node[anchor=west] {Packet Sent} (idle);
+  \draw [arrow] (idle) -- ++(-2,0) -- ++(0,5.5) -|  node[anchor=south] {osDelay} (tx);
+  
+  \end{tikzpicture}
+  \end{center}  
+  
+  \begin{center}  
+  \begin{tikzpicture}[node distance=1.5cm]
+
+  %\node (start) [startstop] {Start};
+  \node (tx) [process] {Read RX buffer};
+  \node (cal) [process, below of=tx] {Move to RX};
+  \node (send) [process, below of=cal] {Wait for idle};
+  \node (idle) [process, below of=send] {Find bytesToRead};
+  
+  \draw [arrow] (tx) -- node[anchor=east] {} (cal);
+  \draw [arrow] (cal) -- node[anchor=east] {} (send);
+  \draw [arrow] (send) -- node[anchor=east] {Packet Recieved} (idle);
+  \draw [arrow] (idle) -- ++(2,0) -- ++(0,5.5) -|  node[anchor=south] {} (tx);
+  
+  \end{tikzpicture}
+  \end{center}  
+  \end{multicols}
+\caption{Pitch roll broadcast}
+\label{fig:broadcast}
+\end{figure}
+
+
+\subsection{Record Sequence Protocol}
+The record sequence implemented is designed to compress a 25 second sequence on the transmitter side and send it to be interpolated by the receiver. Upon a specific button press (D), the transmitter begins recording the pitch and roll into two 256 byte buffers at 10Hz. After 25 seconds, transmitter sends a control packet to the receiver to inform it to expect record sequence data packets. The transmitter then sends all 256 data packets at 33Hz to ensure a minimal packet drop rate. A final control packet is sent to the receiver to end the transmission. Once the transmission has ended, the reciver then begins executing the recorded sequence. In real time, the 10Hz data stream is linearly interpolated back to 100Hz. The result is a smooth approximation of the true recorded sequence.
+
+
+
+
+
+
+
+
+
+
+
+
+
+\section{CC2500}
+
+\subsection{SPI}
+SPI communication to CC2500 is facilitated through the eZ430-RF2500 target board. The four SPI communication pins SCK, MISO, MOSI, CS were traced though the board layouts for eZ430-RF2500 and CC2500 to find the correct pin connections. Figure \ref{fig:readwritespi} shows the timing diagram for SPI reads and writes. Initially, establishing a connection with the CC2500 first required reading two read only registers, PARTNUM and VERSION, to ensure proper functionality of SPI single read. SPI single write, burst write and burst read were tested by writing and reading a sequence to the TEST2, TEST1 and TEST0 registers. By ensuring correct burst functionality on sample R/W registers the RX and TX FIFO buffers for packet transmission could correctly be accessed. 
+
+\begin{figure}[H]
+\centering
+\begin{tabular}{| l | l | l | l | l | l | l | l |}
+    \hline
+    $R/W$ & $B$ & $A_5$ & $A_4$ & $A_3$ & $A_2$ & $A_1$ & $A_0$  \\
+   	\hline
+\end{tabular}
+\caption{SPI Header}
+\label{fig:spiheader}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\begin{tabular}{| l | l | l | l | l | l | l | l |}
+    \hline
+    $D_7$ & $D_6$ & $D_5$ & $D_4$ & $D_3$ & $D_2$ & $D_1$ & $D_0$ 
+    \\	\hline
+\end{tabular}
+\caption{SPI Data}
+\label{fig:spidata}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\begin{center}
+\begin{tikztimingtable}
+  [timing/d/background/.style={fill=white},
+   timing/lslope=0.2,scale=1.5]
+ 		  SCK 	 & LLL 15{T} LLL \\    % CPOL = 0             
+          CS     & H 19L L     \\
+		  MOSI & LL 2D{R/W} 2D{B} 2D{A$_5$} 2D{A$_4$} 2D{A$_3$} 2D{A$_2$} 2D{A$_1$} 2D{A$_0$} LLL \\           
+          MISO & LL 2D{RDY} 2D{S$_3$} 2D{S$_2$} 2D{S$_1$} 2D{F$_3$} 2D{F$_2$} 2D{F$_1$} 2D{F$_0$} LLL \\ 
+            \\
+          CS     & L 19L H     \\
+	 	  MOSI & LL 2D{W$_7$} 2D{W$_6$} 2D{W$_5$} 2D{W$_4$} 2D{W$_3$} 2D{W$_2$} 2D{W$_1$} 2D{W$_0$} LLL \\  
+	 	  MISO & LL 2D{RDY} 2D{S$_3$} 2D{S$_2$} 2D{S$_1$} 2D{F$_3$} 2D{F$_2$} 2D{F$_1$} 2D{F$_0$} LLL \\ 
+	 	  \\ 
+	 	  MOSI & L 19L L \\         
+          MISO & LL 2D{R$_7$} 2D{R$_6$} 2D{R$_5$} 2D{R$_4$} 2D{R$_3$} 2D{R$_2$} 2D{R$_1$} 2D{R$_0$} LLL \\      
+\extracode
+  % Add vertical lines in two colors
+  \begin{pgfonlayer}{background}
+    \begin{scope}[semitransparent,semithick]
+      \vertlines[blue]{2.1,4.1,...,18.1}
+      \vertlines[red]{3.1,5.1,...,17.1}
+    \end{scope}
+  \end{pgfonlayer}
+  % Add big group labels
+  \begin{scope}
+    [font=\sffamily\Large,shift={(-4em,-0.5)},anchor=east]
+    %\node at (  0, 0) {SCK};    \node at (  0,-3 ) {SS};
+    \node at (1ex,-12) {R/W = 0}; \node at (1ex,-18) {R/W = 1};
+  \end{scope}
+\end{tikztimingtable}%
+\end{center}
+\caption{CC2500 SPI reads and writes}
+\label{fig:readwritespi}
+\end{figure}
+
+To access the internal state of the CC2500 a special command strobe is used retrieve a status byte. The status byte returns several core pieces of information about the chip. The most significant bit, a chip ready bit sent to determine if the CC2500 is powering up. Three state bits are sent to convey the internal state of the chip. Finally, a indication of the space in the either the TX or RX FIFO buffer, based on the R/W bit of strobe header, is sent. Figure \ref{fig:cmdstrobes} shows the timing diagram for a command strobe sent on the MOSI line and a status byte sent on the MISO. In the CC2500.c driver, an additional dummy byte is sent to read the status byte since the driver is an adopted from the LIS3DSH accelerometer driver. 
+
+\begin{figure}[H]
+\centering
+\begin{center}
+\begin{tikztimingtable}
+  [timing/d/background/.style={fill=white},
+   timing/lslope=0.2,scale=2.0]
+          CS     & H 19L H     \\
+          SCK 	 & LLL 15{T} LLL \\    % CPOL = 0   
+        %Cycle \# & U     R 2D{Text} 2U    \\ %8{2Q}
+			MOSI & LL 2D{R/W} 2D{B} 2D{A$_5$} 2D{A$_4$} 2D{A$_3$} 2D{A$_2$} 2D{A$_1$} 2D{A$_0$} LLL \\           
+            MISO & LL 2D{RDY} 2D{S$_3$} 2D{S$_2$} 2D{S$_1$} 2D{F$_3$} 2D{F$_2$} 2D{F$_1$} 2D{F$_0$} LLL \\ 
+\extracode
+  % Add vertical lines in two colors
+  \begin{pgfonlayer}{background}
+    \begin{scope}[semitransparent,semithick]
+      \vertlines[blue]{2.1,4.1,...,18.1}
+      \vertlines[red]{3.1,5.1,...,17.1}
+    \end{scope}
+  \end{pgfonlayer}
+  % Add big group labels
+  %\begin{scope}
+  %  [font=\sffamily\Large,shift={(-6em,-0.5)},anchor=east]
+  %  \node at (  0, 0) {SCK};    \node at (  0,-3 ) {SS};
+  %  \node at (1ex,-9) {CPHA=0}; \node at (1ex,-17) {CPHA=1};
+  %\end{scope}
+\end{tikztimingtable}%
+\end{center}
+\caption{Command strobes}
+\label{fig:cmdstrobes}
+\end{figure}
+
+
+\subsection{Configuration}
+On reset, the CC2500 executes a predefined configuration sequence. Generally most configuration settings are not changed from their default, power-on, values. A few registers however, are key to the functionality of the system. The full configuration can be found in smartrf\_cc2500.h in the CC2500 source folder. \\
+
+The base frequency, set using the FREQ2, FREQ1 and FREQ0 registers, was calculated as $2.4347 GHz$. This was purposely chosen to be out of the specified range by approximately $1.7MHz$ to avoid conflict with other packets. In terms of the system design, this enables the receiver to spend less time processing other packets. \\
+
+Important to the internal state machine of the CC2500, registers MCSM1 and MCSM0 were configured. MCSM1 is used to set the RXOFF\_MODE and TXOFF\_MODE to have the next state of the CC2500 to be idle when a packet is read in RX mode or sent in TX mode. The project specific driver written relies on the assumption that after a transmission is received or sent, the CC2500 will return to the idle state. MCSM0 register configures the CC2500 to automatically calibrate when moving to RX or TX from idle. This is necessary to ensure packets are send on the correct frequency.  \\
+
+Finally, the packet configuration registers, PKTCTRL0 and PKTLEN, were modified.  PKTCTRL0 is configured to fix the packet length of transmissions and PKTLEN specifies the packet length of 10 bytes. By fixing the packet length, transmission becomes simpler to implement.\section{CC2500}
+
+\subsection{SPI}
+SPI communication to CC2500 is facilitated through the eZ430-RF2500 target board. The four SPI communication pins SCK, MISO, MOSI, CS were traced though the board layouts for eZ430-RF2500 and CC2500 to find the correct pin connections. Figure \ref{fig:readwritespi} shows the timing diagram for SPI reads and writes. Initially, establishing a connection with the CC2500 first required reading two read only registers, PARTNUM and VERSION, to ensure proper functionality of SPI single read. SPI single write, burst write and burst read were tested by writing and reading a sequence to the TEST2, TEST1 and TEST0 registers. By ensuring correct burst functionality on sample R/W registers the RX and TX FIFO buffers for packet transmission could correctly be accessed. 
+
+\begin{figure}[H]
+\centering
+\begin{tabular}{| l | l | l | l | l | l | l | l |}
+    \hline
+    $R/W$ & $B$ & $A_5$ & $A_4$ & $A_3$ & $A_2$ & $A_1$ & $A_0$  \\
+    \hline
+\end{tabular}
+\caption{SPI Header}
+\label{fig:spiheader}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\begin{tabular}{| l | l | l | l | l | l | l | l |}
+    \hline
+    $D_7$ & $D_6$ & $D_5$ & $D_4$ & $D_3$ & $D_2$ & $D_1$ & $D_0$ 
+    \\  \hline
+\end{tabular}
+\caption{SPI Data}
+\label{fig:spidata}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\begin{center}
+\begin{tikztimingtable}
+  [timing/d/background/.style={fill=white},
+   timing/lslope=0.2,scale=1.5]
+      SCK    & LLL 15{T} LLL \\    % CPOL = 0             
+          CS     & H 19L L     \\
+      MOSI & LL 2D{R/W} 2D{B} 2D{A$_5$} 2D{A$_4$} 2D{A$_3$} 2D{A$_2$} 2D{A$_1$} 2D{A$_0$} LLL \\           
+          MISO & LL 2D{RDY} 2D{S$_3$} 2D{S$_2$} 2D{S$_1$} 2D{F$_3$} 2D{F$_2$} 2D{F$_1$} 2D{F$_0$} LLL \\ 
+            \\
+          CS     & L 19L H     \\
+      MOSI & LL 2D{W$_7$} 2D{W$_6$} 2D{W$_5$} 2D{W$_4$} 2D{W$_3$} 2D{W$_2$} 2D{W$_1$} 2D{W$_0$} LLL \\  
+      MISO & LL 2D{RDY} 2D{S$_3$} 2D{S$_2$} 2D{S$_1$} 2D{F$_3$} 2D{F$_2$} 2D{F$_1$} 2D{F$_0$} LLL \\ 
+      \\ 
+      MOSI & L 19L L \\         
+          MISO & LL 2D{R$_7$} 2D{R$_6$} 2D{R$_5$} 2D{R$_4$} 2D{R$_3$} 2D{R$_2$} 2D{R$_1$} 2D{R$_0$} LLL \\      
+\extracode
+  % Add vertical lines in two colors
+  \begin{pgfonlayer}{background}
+    \begin{scope}[semitransparent,semithick]
+      \vertlines[blue]{2.1,4.1,...,18.1}
+      \vertlines[red]{3.1,5.1,...,17.1}
+    \end{scope}
+  \end{pgfonlayer}
+  % Add big group labels
+  \begin{scope}
+    [font=\sffamily\Large,shift={(-4em,-0.5)},anchor=east]
+    %\node at (  0, 0) {SCK};    \node at (  0,-3 ) {SS};
+    \node at (1ex,-12) {R/W = 0}; \node at (1ex,-18) {R/W = 1};
+  \end{scope}
+\end{tikztimingtable}%
+\end{center}
+\caption{CC2500 SPI reads and writes}
+\label{fig:readwritespi}
+\end{figure}
+
+To access the internal state of the CC2500 a special command strobe is used retrieve a status byte. The status byte returns several core pieces of information about the chip. The most significant bit, a chip ready bit sent to determine if the CC2500 is powering up. Three state bits are sent to convey the internal state of the chip. Finally, a indication of the space in the either the TX or RX FIFO buffer, based on the R/W bit of strobe header, is sent. Figure \ref{fig:cmdstrobes} shows the timing diagram for a command strobe sent on the MOSI line and a status byte sent on the MISO. In the CC2500.c driver, an additional dummy byte is sent to read the status byte since the driver is an adopted from the LIS3DSH accelerometer driver. 
+
+\begin{figure}[H]
+\centering
+\begin{center}
+\begin{tikztimingtable}
+  [timing/d/background/.style={fill=white},
+   timing/lslope=0.2,scale=2.0]
+          CS     & H 19L H     \\
+          SCK    & LLL 15{T} LLL \\    % CPOL = 0   
+        %Cycle \# & U     R 2D{Text} 2U    \\ %8{2Q}
+      MOSI & LL 2D{R/W} 2D{B} 2D{A$_5$} 2D{A$_4$} 2D{A$_3$} 2D{A$_2$} 2D{A$_1$} 2D{A$_0$} LLL \\           
+            MISO & LL 2D{RDY} 2D{S$_3$} 2D{S$_2$} 2D{S$_1$} 2D{F$_3$} 2D{F$_2$} 2D{F$_1$} 2D{F$_0$} LLL \\ 
+\extracode
+  % Add vertical lines in two colors
+  \begin{pgfonlayer}{background}
+    \begin{scope}[semitransparent,semithick]
+      \vertlines[blue]{2.1,4.1,...,18.1}
+      \vertlines[red]{3.1,5.1,...,17.1}
+    \end{scope}
+  \end{pgfonlayer}
+  % Add big group labels
+  %\begin{scope}
+  %  [font=\sffamily\Large,shift={(-6em,-0.5)},anchor=east]
+  %  \node at (  0, 0) {SCK};    \node at (  0,-3 ) {SS};
+  %  \node at (1ex,-9) {CPHA=0}; \node at (1ex,-17) {CPHA=1};
+  %\end{scope}
+\end{tikztimingtable}%
+\end{center}
+\caption{Command strobes}
+\label{fig:cmdstrobes}
+\end{figure}
+
+
+\subsection{Configuration}
+On reset, the CC2500 executes a predefined configuration sequence. Generally most configuration settings are not changed from their default, power-on, values. A few registers however, are key to the functionality of the system. The full configuration can be found in smartrf\_cc2500.h in the CC2500 source folder. \\
+
+The base frequency, set using the FREQ2, FREQ1 and FREQ0 registers, was calculated as $2.4347 GHz$. This was purposely chosen to be out of the specified range by approximately $1.7MHz$ to avoid conflict with other packets. In terms of the system design, this enables the receiver to spend less time processing other packets. \\
+
+Important to the internal state machine of the CC2500, registers MCSM1 and MCSM0 were configured. MCSM1 is used to set the RXOFF\_MODE and TXOFF\_MODE to have the next state of the CC2500 to be idle when a packet is read in RX mode or sent in TX mode. The project specific driver written relies on the assumption that after a transmission is received or sent, the CC2500 will return to the idle state. MCSM0 register configures the CC2500 to automatically calibrate when moving to RX or TX from idle. This is necessary to ensure packets are send on the correct frequency.  \\
+
+Finally, the packet configuration registers, PKTCTRL0 and PKTLEN, were modified.  PKTCTRL0 is configured to fix the packet length of transmissions and PKTLEN specifies the packet length of 10 bytes. By fixing the packet length, transmission becomes simpler to implement.
